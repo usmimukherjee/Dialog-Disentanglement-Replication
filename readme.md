@@ -1,12 +1,12 @@
 ## Dialog disentanglement Replication
 
 This work replicates from their replication package:
-![Disentanglement](https://github.com/jkkummerfeld/irc-disentanglement)
+[Disentanglement](https://github.com/jkkummerfeld/irc-disentanglement)
 
 
 
 References
-
+```bibtex
 @InProceedings{acl19disentangle,
   author    = {Jonathan K. Kummerfeld and Sai R. Gouravajhala and Joseph Peper and Vignesh Athreya and Chulaka Gunasekara and Jatin Ganhotra and Siva Sankalp Patel and Lazaros Polymenakos and Walter S. Lasecki},
   title     = {A Large-Scale Corpus for Conversation Disentanglement},
@@ -35,3 +35,4 @@ References
   arxiv     = {},
   data      = {https://www.jkk.name/irc-disentanglement},
 }
+```

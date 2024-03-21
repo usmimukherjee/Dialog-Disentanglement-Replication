@@ -16,7 +16,7 @@ echo "Moving tokenized file to a new location."
 mv "${tmpfile}.ascii.txt.tok" "${tmpfile}.tok.txt"
 
 echo "Running the main disentangle script."
-python "${DIS_HOME}/src/dialog_disentanglement.py" \
+python -u "${DIS_HOME}/src/dialog_disentanglement.py" \
   "${tmpfile}" \
   --train ../data/train/*annotation.txt \
   --dev ../data/dev/*annotation.txt \

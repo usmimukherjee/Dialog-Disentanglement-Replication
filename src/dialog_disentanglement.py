@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import numpy as np
 from reserved_words import reserved
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 global parser, args, WEIGHT_DECAY, HIDDEN, LEARNING_RATE, LEARNING_DECAY_RATE, MOMENTUM, EPOCHS, DROP, MAX_DIST, OUTPUT, FEATURES, common_short_names, cache
 cache = {}
 common_short_names = {"ng", "_2", "x_", "rq", "\\9", "ww", "nn", "bc", "te", 
@@ -449,99 +450,107 @@ def simplify_token(token):
     return ''.join(chars)
 
 class PyTorchModel(nn.Module):
-    ''' a simplle feed forward neural network model 
-    with hidden layers and a nonlinearity function, 
-    a dropout layer for regularization, 
-    and a final output layer to produce predictions'''
     def __init__(self, input_size, hidden_size, output_size, num_layers, dropout_rate, nonlin):
-        super(PyTorchModel, self).__init__()
-        # Create word embeddings if provided
-        self.embeddings = None
+        super().__init__()
+
+        input_size = 77
+
+        # Create word embeddings and initialize
+        self.id_to_token = []
+        self.token_to_id = {}
+        pretrained = []
         if args.word_vectors:
-            # Initialize token_to_id dictionary and load pretrained word vectors
-            self.token_to_id = {}
-            pretrained = []
-            with open(args.word_vectors, 'r') as f:
-                for line in f:
-                    parts = line.strip().split()
-                    word = parts[0].lower()
-                    vector = [float(v) for v in parts[1:]]
-                    # Map word to its ID and add vector to pretrained list
-                    self.token_to_id[word] = len(self.token_to_id)
-                    pretrained.append(vector)
-            num_embeddings = len(pretrained)
-            embedding_dim = len(pretrained[0])
-            # Create embeddings layer and copy pretrained vectors
-            self.embeddings = nn.Embedding(num_embeddings, embedding_dim)
-            self.embeddings.weight.data.copy_(torch.tensor(pretrained))
-            input_size += 4 * embedding_dim
+            # Loading pretrained word vectors
+            for line in open(args.word_vectors):
+                parts = line.strip().split()
+                word = parts[0].lower()
+                vector = [float(v) for v in parts[1:]]
+                # Assigning IDs to words and building token lookup tables
+                self.token_to_id[word] = len(self.id_to_token)
+                self.id_to_token.append(word)
+                pretrained.append(vector)
+            NWORDS = len(self.id_to_token)
+            DIM_WORDS = len(pretrained[0])
+            # Adding lookup parameters for word embeddings
+            self.embedding = nn.Embedding(NWORDS, DIM_WORDS)
+            self.embedding.weight.data.copy_(torch.tensor(pretrained))
+            input_size += 4 * DIM_WORDS
 
-        # Define the hidden layers and biases
-        layers = []
-        for i in range(num_layers):
-            layers.append(nn.Linear(input_size if i == 0 else hidden_size, hidden_size))
-        # Create a list of hidden layers
-        self.hidden_layers = nn.ModuleList(layers)
-        # Output layer
-        self.output_layer = nn.Linear(hidden_size, output_size)
-        # Dropout layer
-        self.dropout = nn.Dropout(dropout_rate)
-        # Nonlinearity function
-        self.nonlin = nonlin
+        # Initializing hidden layers and biases
+        self.hidden = []
+        self.hidden.append(nn.Linear(input_size, HIDDEN))
+        for i in range(args.layers - 1):
+            self.hidden.append(nn.Linear(HIDDEN, HIDDEN))
+        self.hidden = nn.ModuleList(self.hidden)
+        self.final_sum = nn.Linear(HIDDEN, 1)
 
-    def forward(self, features, word_ids=None):
-        if self.embeddings and word_ids is not None:
-            # Convert list of word_ids to a tensor
-            word_ids_tensor = torch.tensor(word_ids, dtype=torch.long).to(features.device)
-            
-            # Get word embeddings
-            word_embeddings = self.embeddings(word_ids_tensor)
-            
-            # Compute maximum and mean of word embeddings across the sequence dimension
-            qvec_max, _ = torch.max(word_embeddings, dim=1)
-            qvec_mean = torch.mean(word_embeddings, dim=1)
-            
-            # Concatenate them with features along the second dimension (features dimension)
-            features = torch.cat([features, qvec_max, qvec_mean], dim=1)
-        
-        # Apply dropout to the input features
-        h = self.dropout(features)
-        
-        # Pass through each hidden layer and apply nonlinearity
-        for layer in self.hidden_layers:
-            h = layer(h)
-            h = self.apply_nonlinearity(h)
-        
-        # Output layer
-        h = self.output_layer(h)
-        return h
+    def forward(self, query, options, gold, lengths, query_no):
+        if len(options) == 1:
+            # Handling case where only one option is present
+            return None, 0
 
-    def tokens_to_ids(self, tokens):
-        # Convert tokens to lowercase and map them to corresponding IDs
-        return [self.token_to_id.get(token.lower(), -1) for token in tokens]  # -1 for unknown tokens
+        final = []
+        if args.word_vectors:
+            # Processing query vectors if word vectors are used
+            qvecs = self.embedding(torch.tensor(query))
+            qvec_max, _ = qvecs.max(dim=0)
+            qvec_mean = qvecs.mean(dim=0)
+        for otext, features in options:
+            inputs = torch.tensor(features, dtype=torch.float)
+            if args.word_vectors:
+                # Processing option vectors if word vectors are used
+                ovecs = self.embedding(torch.tensor(otext))
+                ovec_max, _ = ovecs.max(dim=0)
+                ovec_mean = ovecs.mean(dim=0)
+                inputs = torch.cat([inputs, qvec_max, qvec_mean, ovec_max, ovec_mean])
+            if args.drop > 0:
+                # Applying dropout if specified
+                inputs = nn.functional.dropout(inputs, p=args.drop)
+            h = inputs
+            for layer in self.hidden:
+                h = layer(h)
+                # Applying specified non-linear activation functions
+                if args.nonlin == "linear":
+                    pass
+                elif args.nonlin == "tanh":
+                    h = torch.tanh(h)
+                elif args.nonlin == "cube":
+                    h = torch.pow(h, 3)
+                elif args.nonlin == "logistic":
+                    h = torch.sigmoid(h)
+                elif args.nonlin == "relu":
+                    h = torch.relu(h)
+                elif args.nonlin == "elu":
+                    h = nn.functional.elu(h)
+                elif args.nonlin == "selu":
+                    h = nn.functional.selu(h)
+                elif args.nonlin == "softsign":
+                    h = nn.functional.softsign(h)
+                elif args.nonlin == "swish":
+                    h = h * torch.sigmoid(h)
+            final.append(self.final_sum(h))
 
-    def apply_nonlinearity(self, x):
-        # Apply specified nonlinearity function
-        if self.nonlin == 'linear':
-            return x  # No non-linearity
-        elif self.nonlin == 'tanh':
-            return torch.tanh(x)
-        elif self.nonlin == 'cube':
-            return torch.pow(x, 3)
-        elif self.nonlin == 'logistic':
-            return torch.sigmoid(x)
-        elif self.nonlin == 'relu':
-            return F.relu(x)
-        elif self.nonlin == 'elu':
-            return F.elu(x)
-        elif self.nonlin == 'selu':
-            return F.selu(x)
-        elif self.nonlin == 'softsign':
-            return F.softsign(x)
-        elif self.nonlin == 'swish':
-            return x * torch.sigmoid(x)
-        else:
-            raise ValueError('Unsupported nonlinearity')
+        final = torch.cat(final)
+        # Calculating negative log likelihood loss
+        nll = -nn.functional.log_softmax(final, dim=0)
+        dense_gold = []
+        # Converting gold labels to dense representation
+        for i in range(len(options)):
+            dense_gold.append(1.0 / len(gold) if i in gold else 0.0)
+        answer = torch.tensor(dense_gold, dtype=torch.float)
+        loss = answer @ nll
+        # Predicting link based on maximum value
+        predicted_link = final.argmax().item()
+
+        return loss, predicted_link
+
+    def get_ids(self, words):
+        ans = []
+        backup = self.token_to_id.get('<unka>', 0)
+        # Obtaining IDs for given words
+        for word in words:
+            ans.append(self.token_to_id.get(word, backup))
+        return ans
 
 def do_instance(instance, train, model, optimizer, do_cache=True):
     name, query, gold, text_ascii, text_tok, info, target_info = instance
@@ -554,22 +563,23 @@ def do_instance(instance, train, model, optimizer, do_cache=True):
     # Get features
     options = []
     query_ascii = text_ascii[query]
-    query_tok = model.tokens_to_ids(text_tok[query])
+    query_tok = model.get_ids(text_tok[query])
     for i in range(query, max(-1, query - MAX_DIST), -1):
         option_ascii = text_ascii[i]
-        option_tok = model.tokens_to_ids(text_tok[i])
+        option_tok = model.get_ids(text_tok[i])
         features = get_features(name, query, i, text_ascii, text_tok, info, target_info, do_cache)
         options.append((option_tok, features))
     gold = [query - v for v in gold]
     lengths = [len(sent) for sent in options]
 
     # Run computation
+    model.zero_grad()
     example_loss, output = model(query_tok, options, gold, lengths, query)
     loss = 0.0
     if train and example_loss is not None:
         example_loss.backward()
-        optimizer.update()
-        loss = example_loss.scalar_value()
+        optimizer.step()
+        loss = example_loss.item()
     predicted = output
     matched = (predicted in gold)
 
@@ -627,10 +637,11 @@ if __name__ == "__main__":
     
     # training loop i guess
     if args.train:
+        model.train()
         step = 0
+        print ("Starting the training")
         for epoch in range(EPOCHS):
             random.shuffle(train)
-            # update the learning rate
             optimizer.learning_rate = LEARNING_RATE / (1+ LEARNING_DECAY_RATE * epoch)
 
              # Loop over batches
@@ -639,51 +650,11 @@ if __name__ == "__main__":
             total = 0
             loss_steps = 0
             for instance in train:
-                step += 1
+                ex_loss = do_instance(instance, True, model, optimizer)
+                loss += ex_loss[0]
+                loss_steps += 1
+                print ("Epoch", epoch, "Step", loss_steps, "Loss", loss / loss_steps)
             
-            # torch.cuda.empty_cache()  # If you're using GPU to free up memory
-            torch.autograd.set_grad_enabled(False)  # Disable gradient computation
-            torch.autograd.set_grad_enabled(True)  # Enable gradient computation
-            
-            ex_loss, matched, _ = do_instance(instance, True, model, optimizer)
-            loss += ex_loss
-            loss_steps += 1
-            
-            if matched:
-                match += 1
-            total += len(instance[2])
-           
-            if step % args.report_freq == 0:
-                # Dev pass
-                dev_match = 0
-                dev_total = 0
-                
-                for dinstance in dev: 
-                    ex_loss, matched, _ = do_instance(dinstance, False, model, optimizer)
-                    if matched:
-                        dev_match += 1
-                    dev_total += len(dinstance[2])
-                
-                tacc = match / total
-                dacc = dev_match / dev_total
-                print("{} tl {:.3f} ta {:.3f} da {:.3f} from {} {}".format(epoch, loss / loss_steps, tacc, dacc, dev_match, dev_total), file=log_file)
-                log_file.flush()
-                
-                if prev_best is None or prev_best[0] < dacc:
-                    prev_best = (dacc, epoch)
-                    model.model.save(args.prefix + ".pytorch.model")
-        
+            print ("Loss", loss / loss_steps)      
             if prev_best is not None and epoch - prev_best[1] > 5:
                 break
-            
-        # Load model
-        if prev_best is not None or args.model:
-            location = args.model
-            if location is None:
-                location = args.prefix +".pytorch.model"
-            model.model.populate(location)
-        for instance in test:
-                 _, _, prediction = do_instance(instance, False, model, optimizer, False)
-                 print("{}:{} {} -".format(instance[0], instance[1], instance[1] - prediction)) 
-                 
-    log_file.close()  

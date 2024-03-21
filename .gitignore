@@ -10,3 +10,7 @@ src/disentangle.py
 tools
 venv
 acl19-irc-disentanglement_auto-data-full.txt.bz2
+src/todo.3710.ascii.txt
+src/todo.3710.log
+src/todo.3710.out
+src/todo.3710.tok.txt

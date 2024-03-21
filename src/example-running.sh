@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "Setting DIS_HOME to the local repository base path."
-DIS_HOME="E:/Pycharm Projects/Improving BugMentor/irc-disentanglement"
+DIS_HOME="D:\BugMentor\Dialog-Disentanglement-Replication\\"
 input_file="${DIS_HOME}/data/train/2004-12-25.train-c.ascii.txt"
 tmpfile=todo.$RANDOM
 

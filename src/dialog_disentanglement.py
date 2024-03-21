@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from reserved_words import reserved
+from tqdm import tqdm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 global parser, args, WEIGHT_DECAY, HIDDEN, LEARNING_RATE, LEARNING_DECAY_RATE, MOMENTUM, EPOCHS, DROP, MAX_DIST, OUTPUT, FEATURES, common_short_names, cache
@@ -639,22 +640,24 @@ if __name__ == "__main__":
     if args.train:
         model.train()
         step = 0
-        print ("Starting the training")
+        print("Starting the training")
         for epoch in range(EPOCHS):
             random.shuffle(train)
-            optimizer.learning_rate = LEARNING_RATE / (1+ LEARNING_DECAY_RATE * epoch)
+            optimizer.learning_rate = LEARNING_RATE / (1 + LEARNING_DECAY_RATE * epoch)
 
-             # Loop over batches
+            # Loop over batches
             loss = 0
             match = 0
             total = 0
             loss_steps = 0
-            for instance in train:
-                ex_loss = do_instance(instance, True, model, optimizer)
-                loss += ex_loss[0]
-                loss_steps += 1
-                print ("Epoch", epoch, "Step", loss_steps, "Loss", loss / loss_steps)
-            
-            print ("Loss", loss / loss_steps)      
+            with tqdm(total=len(train), desc=f'Epoch {epoch}', unit='instance') as pbar:
+                for instance in train:
+                    ex_loss = do_instance(instance, True, model, optimizer)
+                    loss += ex_loss[0]
+                    loss_steps += 1
+                    pbar.set_postfix({'Loss': loss / loss_steps})
+                    pbar.update(1)
+
+            print("Loss", loss / loss_steps)
             if prev_best is not None and epoch - prev_best[1] > 5:
                 break
